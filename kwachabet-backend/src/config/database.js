@@ -70,9 +70,20 @@ async function query(text, params = []) {
     const result = await pool.query(text, params);
     return result;
   } catch (err) {
-    logger.error('Query error:', err.message);
-    throw err;
+  console.error('FULL DATABASE ERROR:', err);
+
+  logger.error(`Query error: ${err.message}`);
+
+  if (err.detail) {
+    logger.error(`Detail: ${err.detail}`);
   }
+
+  if (err.code) {
+    logger.error(`PostgreSQL Code: ${err.code}`);
+  }
+
+  throw err;
+}
 }
 
 async function withTransaction(callback) {
