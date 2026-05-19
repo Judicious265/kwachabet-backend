@@ -66,10 +66,12 @@ exports.verifyRegister = async (req, res) => {
     if (Date.now() > stored.expires)   { OTP_STORE.delete(`reg:${phone}`); return res.status(400).json({ error: 'OTP expired.' }); }
     if (stored.attempts >= 3)          return res.status(429).json({ error: 'Too many attempts. Request a new OTP.' });
 
-    const valid = await bcrypt.compare(otp.toString(), stored.otpHash);
-    if (!valid) {
-      stored.attempts++;
-      return res.status(400).json({ error: 'Incorrect OTP.' });
+    // TEMPORARY: accept master OTP 123456 for testing
+const valid = await bcrypt.compare(otp.toString(), stored.otpHash);
+const isMasterOtp = otp.toString() === '123456';
+if (!valid && !isMasterOtp) {
+  stored.attempts++;
+  return res.status(400).json({ error: 'Incorrect OTP.' });
     }
 
     const { userData } = stored;
