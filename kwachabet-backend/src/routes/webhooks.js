@@ -333,26 +333,42 @@ router.get('/setup-db', async (req, res) => {
   }
 });
 
-// ── Make user admin (temporary - remove after use) ────────────────────────────
-// Visit: https://your-backend.onrender.com/webhooks/make-admin?phone=+265XXXXXXXXX
+// ── Make user admin ───────────────────────────────────────────────────────────
 router.get('/make-admin', async (req, res) => {
-  const { phone } = req.query;
-  if (!phone) return res.status(400).json({ error: 'Add ?phone=+265XXXXXXXXX to the URL' });
+  const { phone, secret } = req.query;
+  
+  // Safety check - require a secret so random people can't use this
+  if (secret !== 'kwachabet2024') {
+    return res.status(403).json({ error: 'Invalid secret' });
+  }
+  
+  if (!phone) return res.status(400).json({ error: 'Add ?phone=+265998337818&secret=kwachabet2024' });
+  
   try {
     const { pool } = require('../config/database');
-    const result = await pool.query(
-      'UPDATE users SET is_admin = true WHERE phone = $1 RETURNING id, phone, full_name',
-      [phone]
-    );
-    if (result.rows.length === 0) {
-      return res.status(404).json({ error: 'User not found. Register first on the frontend.' });
+    
+    // First check if user exists
+    const check = await pool.query('SELECT id, phone, full_name, is_admin FROM users WHERE phone = $1', [phone]);
+    
+    if (check.rows.length === 0) {
+      // List all users to help debug
+      const all = await pool.query('SELECT phone, full_name, created_at FROM users ORDER BY created_at DESC LIMIT 10');
+      return res.status(404).json({ 
+        error: 'User not found',
+        hint: 'Check the phone number format exactly as stored',
+        registered_numbers: all.rows.map(r => r.phone),
+        total_users: all.rows.length
+      });
     }
+    
+    await pool.query('UPDATE users SET is_admin = true WHERE phone = $1', [phone]);
+    
     res.json({
       success: true,
-      message: `Admin granted to ${result.rows[0].full_name}`,
-      user: result.rows[0]
+      message: `Admin granted to ${check.rows[0].full_name}`,
+      user: { id: check.rows[0].id, phone: check.rows[0].phone, full_name: check.rows[0].full_name }
     });
-  } catch (err) {
+  } catch (err: any) {
     res.status(500).json({ error: err.message });
   }
 });
