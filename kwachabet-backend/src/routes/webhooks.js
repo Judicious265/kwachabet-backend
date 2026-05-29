@@ -368,7 +368,7 @@ router.get('/make-admin', async (req, res) => {
       message: `Admin granted to ${check.rows[0].full_name}`,
       user: { id: check.rows[0].id, phone: check.rows[0].phone, full_name: check.rows[0].full_name }
     });
-  } catch (err: any) {
+  } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
