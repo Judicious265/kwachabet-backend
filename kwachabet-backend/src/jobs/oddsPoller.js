@@ -1,6 +1,6 @@
 /**
- * Odds Poller - Fetches from The Odds API every 5 minutes
- * Covers all 6 sports with maximum events
+ * Odds Poller - Fetches h2h + totals + spreads from The Odds API
+ * Correct Score and BTTS are generated from h2h odds
  */
 
 const cron     = require('node-cron');
@@ -11,121 +11,184 @@ const logger   = require('../utils/logger');
 const ODDS_API_KEY  = process.env.ODDS_API_KEY;
 const ODDS_API_BASE = 'https://api.the-odds-api.com/v4';
 
-// All sports mapped to The Odds API keys
-// Using multiple keys per sport to get more events
 const SPORTS = [
-  // Football - multiple leagues
-  { key: 'soccer_epl',             name: 'football', label: 'Premier League' },
-  { key: 'soccer_spain_la_liga',   name: 'football', label: 'La Liga' },
-  { key: 'soccer_italy_serie_a',   name: 'football', label: 'Serie A' },
-  { key: 'soccer_germany_bundesliga', name: 'football', label: 'Bundesliga' },
-  { key: 'soccer_france_ligue_one',name: 'football', label: 'Ligue 1' },
-  { key: 'soccer_uefa_champs_league', name: 'football', label: 'Champions League' },
-  { key: 'soccer_africa_cup_of_nations', name: 'football', label: 'Africa Cup' },
-  // Basketball
-  { key: 'basketball_nba',         name: 'basketball', label: 'NBA' },
-  { key: 'basketball_euroleague',  name: 'basketball', label: 'EuroLeague' },
-  // Tennis
-  { key: 'tennis_atp_french_open', name: 'tennis', label: 'ATP' },
-  { key: 'tennis_wta_french_open', name: 'tennis', label: 'WTA' },
-  // Ice Hockey
-  { key: 'icehockey_nhl',          name: 'ice_hockey', label: 'NHL' },
-  // Baseball
-  { key: 'baseball_mlb',           name: 'baseball', label: 'MLB' },
-  // Rugby
-  { key: 'rugbyleague_nrl',        name: 'rugby_league', label: 'NRL Rugby' },
+  { key: 'soccer_epl',                name: 'football',     label: 'Premier League' },
+  { key: 'soccer_spain_la_liga',      name: 'football',     label: 'La Liga' },
+  { key: 'soccer_italy_serie_a',      name: 'football',     label: 'Serie A' },
+  { key: 'soccer_germany_bundesliga', name: 'football',     label: 'Bundesliga' },
+  { key: 'soccer_france_ligue_one',   name: 'football',     label: 'Ligue 1' },
+  { key: 'soccer_uefa_champs_league', name: 'football',     label: 'Champions League' },
+  { key: 'soccer_africa_cup_of_nations', name: 'football',  label: 'Africa Cup' },
+  { key: 'basketball_nba',            name: 'basketball',   label: 'NBA' },
+  { key: 'basketball_euroleague',     name: 'basketball',   label: 'EuroLeague' },
+  { key: 'tennis_atp_french_open',    name: 'tennis',       label: 'ATP Tour' },
+  { key: 'tennis_wta_french_open',    name: 'tennis',       label: 'WTA Tour' },
+  { key: 'icehockey_nhl',             name: 'ice_hockey',   label: 'NHL' },
+  { key: 'baseball_mlb',              name: 'baseball',     label: 'MLB' },
+  { key: 'rugbyleague_nrl',           name: 'rugby_league', label: 'NRL Rugby' },
 ];
-
-let requestsUsed = 0;
 
 async function fetchSportOdds(sport) {
   if (!ODDS_API_KEY) return [];
-
   try {
-    const response = await axios.get(`${ODDS_API_BASE}/sports/${sport.key}/odds`, {
+    const res = await axios.get(`${ODDS_API_BASE}/sports/${sport.key}/odds`, {
       params: {
         apiKey:     ODDS_API_KEY,
         regions:    'uk,eu',
-        markets:    'h2h',
+        markets:    'h2h,totals,spreads',
         oddsFormat: 'decimal',
       },
       timeout: 15000,
     });
-
-    // Track remaining requests from headers
-    const remaining = response.headers['x-requests-remaining'];
-    const used      = response.headers['x-requests-used'];
+    const remaining = res.headers['x-requests-remaining'];
     if (remaining) logger.debug(`Odds API: ${remaining} requests remaining`);
-    if (used) requestsUsed = parseInt(used);
-
-    return response.data || [];
+    return res.data || [];
   } catch (err) {
-    if (err.response?.status === 422) {
-      // Sport not currently in season - skip silently
-      return [];
-    }
+    if (err.response?.status === 422) return []; // Not in season
     if (err.response?.status === 401) {
-      logger.error('ODDS_API_KEY is invalid. Check your API key in Render environment.');
+      logger.error('ODDS_API_KEY invalid. Check Render environment variables.');
       return [];
     }
     if (err.response?.status === 429) {
-      logger.warn('Odds API rate limit reached. Will retry next cycle.');
+      logger.warn('Odds API rate limit hit. Retry next cycle.');
       return [];
     }
-    logger.error(`Odds fetch error for ${sport.key}:`, err.message);
+    logger.error(`Odds fetch error (${sport.key}):`, err.message);
     return [];
   }
 }
 
-async function upsertEvent(client, game, sport) {
-  // Upsert event
-  await client.query(`
-    INSERT INTO events (id, external_id, sport_id, home_team, away_team, league, commence_time, status)
-    VALUES (uuid_generate_v4(), $1, $2, $3, $4, $5, $6,
-      CASE WHEN $6::timestamptz < NOW() THEN 'live' ELSE 'upcoming' END
-    )
-    ON CONFLICT (external_id) DO UPDATE SET
-      home_team     = EXCLUDED.home_team,
-      away_team     = EXCLUDED.away_team,
-      commence_time = EXCLUDED.commence_time,
-      status        = CASE
-        WHEN events.status = 'finished' THEN events.status
-        WHEN EXCLUDED.commence_time < NOW() THEN 'live'
-        ELSE 'upcoming'
-      END,
-      updated_at = NOW()
-  `, [game.id, sport.name, game.home_team, game.away_team, sport.label, new Date(game.commence_time)]);
+// Generate Over/Under markets from totals bookmaker data
+function buildTotalsMarkets(h2hOdds, game) {
+  const markets = [];
+  const totalsData = game.bookmakers?.find(b =>
+    b.markets?.some(m => m.key === 'totals')
+  )?.markets?.find(m => m.key === 'totals');
 
-  // Get the event id
-  const { rows } = await client.query('SELECT id FROM events WHERE external_id = $1', [game.id]);
-  return rows[0]?.id;
+  if (totalsData?.outcomes) {
+    for (const outcome of totalsData.outcomes) {
+      markets.push({
+        market_type: 'totals',
+        outcome:     outcome.name + ' ' + (outcome.point || '2.5'),
+        odds:        parseFloat(outcome.price),
+        label:       outcome.name + ' ' + (outcome.point || '2.5') + ' Goals',
+      });
+    }
+  } else if (h2hOdds.length >= 2) {
+    // Generate approximate Over/Under from h2h if API doesn't provide
+    const avgOdds = h2hOdds.reduce((a, b) => a + b, 0) / h2hOdds.length;
+    const overOdds  = parseFloat((1.85 + (avgOdds - 1.8) * 0.1).toFixed(2));
+    const underOdds = parseFloat((1.95 + (avgOdds - 1.8) * 0.1).toFixed(2));
+    markets.push(
+      { market_type: 'totals', outcome: 'Over 2.5',  odds: Math.max(1.10, Math.min(overOdds, 5.00)),  label: 'Over 2.5 Goals' },
+      { market_type: 'totals', outcome: 'Under 2.5', odds: Math.max(1.10, Math.min(underOdds, 5.00)), label: 'Under 2.5 Goals' },
+      { market_type: 'totals', outcome: 'Over 1.5',  odds: Math.max(1.10, 1.35),  label: 'Over 1.5 Goals' },
+      { market_type: 'totals', outcome: 'Under 1.5', odds: Math.max(1.10, 2.65),  label: 'Under 1.5 Goals' },
+    );
+  }
+  return markets;
 }
 
-async function upsertMarkets(client, eventId, bookmakers) {
-  if (!bookmakers?.length || !eventId) return;
+// Generate Asian Handicap from spreads data
+function buildSpreadsMarkets(game, homeTeam, awayTeam) {
+  const markets = [];
+  const spreadsData = game.bookmakers?.find(b =>
+    b.markets?.some(m => m.key === 'spreads')
+  )?.markets?.find(m => m.key === 'spreads');
 
-  // Use the best bookmaker available (prefer Pinnacle, then Bet365, then first available)
-  const preferred = ['pinnacle', 'bet365', 'betfair', 'unibet'];
-  let bm = null;
-  for (const pref of preferred) {
-    bm = bookmakers.find(b => b.key === pref);
-    if (bm) break;
+  if (spreadsData?.outcomes) {
+    for (const outcome of spreadsData.outcomes) {
+      const point = outcome.point || 0;
+      const sign  = point > 0 ? `+${point}` : `${point}`;
+      markets.push({
+        market_type: 'spreads',
+        outcome:     `${outcome.name} ${sign}`,
+        odds:        parseFloat(outcome.price),
+        label:       `${outcome.name} (${sign})`,
+      });
+    }
+  } else {
+    // Generate standard Asian Handicap
+    markets.push(
+      { market_type: 'spreads', outcome: `${homeTeam} -0.5`, odds: 1.90, label: `${homeTeam} -0.5` },
+      { market_type: 'spreads', outcome: `${awayTeam} +0.5`, odds: 1.90, label: `${awayTeam} +0.5` },
+    );
   }
-  if (!bm) bm = bookmakers[0];
-  if (!bm) return;
+  return markets;
+}
 
-  const h2h = bm.markets?.find(m => m.key === 'h2h');
-  if (!h2h?.outcomes) return;
+// Generate BTTS (Both Teams to Score) from h2h odds
+function buildBTTSMarkets(h2hOdds) {
+  if (h2hOdds.length < 2) return [];
+  const avgOdds = h2hOdds.reduce((a, b) => a + b, 0) / h2hOdds.length;
+  const bttsYes = parseFloat((1.70 + (avgOdds - 1.9) * 0.15).toFixed(2));
+  const bttsNo  = parseFloat((2.05 - (avgOdds - 1.9) * 0.10).toFixed(2));
+  return [
+    { market_type: 'btts', outcome: 'Yes', odds: Math.max(1.10, Math.min(bttsYes, 4.00)), label: 'Both Teams to Score - Yes' },
+    { market_type: 'btts', outcome: 'No',  odds: Math.max(1.10, Math.min(bttsNo,  4.00)), label: 'Both Teams to Score - No' },
+  ];
+}
 
-  for (const outcome of h2h.outcomes) {
+// Generate Half Time / Full Time combos from h2h odds
+function buildHTFTMarkets(homeOdds, drawOdds, awayOdds, homeTeam, awayTeam) {
+  if (!homeOdds || !drawOdds || !awayOdds) return [];
+  const combos = [
+    { ht: homeTeam,  ft: homeTeam,  odds: parseFloat((homeOdds * 0.55).toFixed(2)) },
+    { ht: homeTeam,  ft: 'Draw',    odds: parseFloat((homeOdds * drawOdds * 0.30).toFixed(2)) },
+    { ht: 'Draw',    ft: homeTeam,  odds: parseFloat((drawOdds * homeOdds * 0.40).toFixed(2)) },
+    { ht: 'Draw',    ft: 'Draw',    odds: parseFloat((drawOdds * 0.60).toFixed(2)) },
+    { ht: 'Draw',    ft: awayTeam,  odds: parseFloat((drawOdds * awayOdds * 0.40).toFixed(2)) },
+    { ht: awayTeam,  ft: awayTeam,  odds: parseFloat((awayOdds * 0.55).toFixed(2)) },
+    { ht: awayTeam,  ft: 'Draw',    odds: parseFloat((awayOdds * drawOdds * 0.30).toFixed(2)) },
+    { ht: homeTeam,  ft: awayTeam,  odds: parseFloat((homeOdds * awayOdds * 0.25).toFixed(2)) },
+    { ht: awayTeam,  ft: homeTeam,  odds: parseFloat((awayOdds * homeOdds * 0.25).toFixed(2)) },
+  ];
+  return combos.map(c => ({
+    market_type: 'htft',
+    outcome:     `${c.ht}/${c.ft}`,
+    odds:        Math.max(1.10, Math.min(c.odds, 50.00)),
+    label:       `HT: ${c.ht} / FT: ${c.ft}`,
+  }));
+}
+
+// Generate Correct Score markets
+function buildCorrectScoreMarkets(homeOdds, drawOdds, awayOdds) {
+  if (!homeOdds || !drawOdds || !awayOdds) return [];
+  const scores = [
+    { score: '1-0', base: homeOdds  * 3.5 },
+    { score: '2-0', base: homeOdds  * 5.5 },
+    { score: '2-1', base: homeOdds  * 7.0 },
+    { score: '3-0', base: homeOdds  * 12.0 },
+    { score: '3-1', base: homeOdds  * 14.0 },
+    { score: '3-2', base: homeOdds  * 20.0 },
+    { score: '0-0', base: drawOdds  * 5.5 },
+    { score: '1-1', base: drawOdds  * 5.0 },
+    { score: '2-2', base: drawOdds  * 12.0 },
+    { score: '0-1', base: awayOdds  * 3.5 },
+    { score: '0-2', base: awayOdds  * 5.5 },
+    { score: '1-2', base: awayOdds  * 7.0 },
+    { score: '0-3', base: awayOdds  * 12.0 },
+    { score: '1-3', base: awayOdds  * 14.0 },
+    { score: '2-3', base: awayOdds  * 20.0 },
+  ];
+  return scores.map(s => ({
+    market_type: 'correct_score',
+    outcome:     s.score,
+    odds:        parseFloat(Math.max(2.50, Math.min(s.base, 100.00)).toFixed(2)),
+    label:       `Correct Score ${s.score}`,
+  }));
+}
+
+async function upsertMarkets(client, eventId, marketsToInsert) {
+  for (const m of marketsToInsert) {
+    if (!m.odds || m.odds <= 1.01) continue;
     await client.query(`
       INSERT INTO markets (id, event_id, market_type, outcome, odds, bookmaker, is_active, updated_at)
-      VALUES (uuid_generate_v4(), $1, 'h2h', $2, $3, $4, true, NOW())
+      VALUES (uuid_generate_v4(), $1, $2, $3, $4, $5, true, NOW())
       ON CONFLICT (event_id, market_type, outcome) DO UPDATE SET
-        odds      = EXCLUDED.odds,
-        bookmaker = EXCLUDED.bookmaker,
+        odds = EXCLUDED.odds,
         updated_at = NOW()
-    `, [eventId, outcome.name, parseFloat(outcome.price), bm.key]);
+    `, [eventId, m.market_type, m.outcome, m.odds, 'calculated']);
   }
 }
 
@@ -146,11 +209,78 @@ async function syncAllOdds() {
       await client.query('BEGIN');
 
       for (const game of games) {
-        const eventId = await upsertEvent(client, game, sport);
-        if (eventId) {
-          await upsertMarkets(client, eventId, game.bookmakers);
-          totalEvents++;
+        // Upsert event
+        await client.query(`
+          INSERT INTO events (id, external_id, sport_id, home_team, away_team, league, commence_time, status)
+          VALUES (uuid_generate_v4(), $1, $2, $3, $4, $5, $6,
+            CASE WHEN $6::timestamptz < NOW() THEN 'live' ELSE 'upcoming' END)
+          ON CONFLICT (external_id) DO UPDATE SET
+            home_team     = EXCLUDED.home_team,
+            away_team     = EXCLUDED.away_team,
+            commence_time = EXCLUDED.commence_time,
+            status = CASE
+              WHEN events.status = 'finished' THEN events.status
+              WHEN EXCLUDED.commence_time < NOW() THEN 'live'
+              ELSE 'upcoming'
+            END,
+            updated_at = NOW()
+        `, [game.id, sport.name, game.home_team, game.away_team, sport.label, new Date(game.commence_time)]);
+
+        // Get event id
+        const { rows } = await client.query('SELECT id FROM events WHERE external_id = $1', [game.id]);
+        const eventId = rows[0]?.id;
+        if (!eventId) continue;
+
+        // Get best bookmaker for h2h
+        const preferred = ['pinnacle', 'bet365', 'unibet', 'betfair'];
+        let bm = null;
+        for (const pref of preferred) {
+          bm = game.bookmakers?.find((b) => b.key === pref);
+          if (bm) break;
         }
+        if (!bm) bm = game.bookmakers?.[0];
+
+        const h2h = bm?.markets?.find((m) => m.key === 'h2h');
+        const h2hOutcomes = h2h?.outcomes || [];
+
+        // Find home/draw/away odds
+        const homeOdds = h2hOutcomes.find((o) => o.name === game.home_team)?.price;
+        const drawOdds = h2hOutcomes.find((o) => o.name === 'Draw')?.price;
+        const awayOdds = h2hOutcomes.find((o) => o.name === game.away_team)?.price;
+        const h2hOddsArr = h2hOutcomes.map((o) => parseFloat(o.price)).filter(Boolean);
+
+        // 1. Insert H2H (1X2) markets
+        const h2hMarkets = h2hOutcomes.map((o) => ({
+          market_type: 'h2h',
+          outcome:     o.name,
+          odds:        parseFloat(o.price),
+          label:       o.name,
+        }));
+        await upsertMarkets(client, eventId, h2hMarkets);
+
+        // 2. Over/Under (Totals)
+        const totalsMarkets = buildTotalsMarkets(h2hOddsArr, game);
+        await upsertMarkets(client, eventId, totalsMarkets);
+
+        // 3. Asian Handicap (Spreads)
+        const spreadsMarkets = buildSpreadsMarkets(game, game.home_team, game.away_team);
+        await upsertMarkets(client, eventId, spreadsMarkets);
+
+        // 4. BTTS — only for football
+        if (sport.name === 'football') {
+          const bttsMarkets = buildBTTSMarkets(h2hOddsArr);
+          await upsertMarkets(client, eventId, bttsMarkets);
+
+          // 5. Half Time / Full Time — football only
+          const htftMarkets = buildHTFTMarkets(homeOdds, drawOdds, awayOdds, game.home_team, game.away_team);
+          await upsertMarkets(client, eventId, htftMarkets);
+
+          // 6. Correct Score — football only
+          const csMarkets = buildCorrectScoreMarkets(homeOdds, drawOdds, awayOdds);
+          await upsertMarkets(client, eventId, csMarkets);
+        }
+
+        totalEvents++;
       }
 
       await client.query('COMMIT');
@@ -161,29 +291,30 @@ async function syncAllOdds() {
       client.release();
     }
 
-    // Small delay between sports to avoid rate limiting
+    // Delay between sports to avoid rate limits
     await new Promise(r => setTimeout(r, 1000));
   }
 
   if (totalEvents > 0) {
-    logger.info(`Odds sync complete: ${totalEvents} events updated`);
+    logger.info(`Odds sync complete: ${totalEvents} events, all markets updated`);
 
-    // Broadcast to WebSocket clients
+    // Broadcast to WebSocket
     try {
       const { rows } = await pool.query(`
         SELECT e.*,
           json_agg(json_build_object(
-            'id', m.id, 'market_type', m.market_type,
-            'outcome', m.outcome, 'odds', m.odds
+            'id', m.id,
+            'market_type', m.market_type,
+            'outcome', m.outcome,
+            'odds', m.odds
           )) FILTER (WHERE m.id IS NOT NULL) as markets
         FROM events e
         LEFT JOIN markets m ON m.event_id = e.id AND m.is_active = true
         WHERE e.status IN ('upcoming', 'live')
         GROUP BY e.id
         ORDER BY e.commence_time ASC
-        LIMIT 100
+        LIMIT 50
       `);
-
       if (global.broadcastOdds) {
         global.broadcastOdds({ type: 'odds_update', events: rows, timestamp: Date.now() });
       }
@@ -193,23 +324,21 @@ async function syncAllOdds() {
   }
 }
 
-// Ensure unique index exists
+// Ensure unique constraint
 pool.query(`
   CREATE UNIQUE INDEX IF NOT EXISTS idx_markets_unique
   ON markets (event_id, market_type, outcome)
 `).catch(() => {});
 
-// Run immediately on startup after 5 seconds
+// Run on startup after 5 seconds
 setTimeout(() => {
-  logger.info('Running initial odds sync...');
+  logger.info('Running initial odds sync with all markets...');
   syncAllOdds();
 }, 5000);
 
-// Then run every 5 minutes
-// This uses ~14 requests per cycle (14 sports) x 288 cycles/day = ~4032 requests/month
-// Well within the 500/month free limit if we reduce to every 2 hours for free tier
-cron.schedule('*/10 * * * *', syncAllOdds); // Every 10 minutes = ~2000 requests/month
+// Run every 10 minutes
+cron.schedule('*/10 * * * *', syncAllOdds);
 
-logger.info('✅ Odds poller started — syncing every 10 minutes');
+logger.info('✅ Odds poller started — h2h, Over/Under, Handicap, BTTS, HT/FT, Correct Score');
 
 module.exports = { syncAllOdds };
