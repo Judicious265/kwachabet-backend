@@ -195,6 +195,27 @@ async function upsertMarkets(client, eventId, markets) {
 }
 
 // Main sync function
+
+// Build Double Chance markets (1X, X2, 12)
+function buildDoubleChance(homeTeam, awayTeam, homeOdds, drawOdds, awayOdds) {
+  if (!homeOdds || !drawOdds || !awayOdds) return [];
+
+  const homeProb = 1 / homeOdds;
+  const drawProb = 1 / drawOdds;
+  const awayProb = 1 / awayOdds;
+  const margin   = 1.05;
+
+  const dc1X = parseFloat(Math.max(1.05, Math.min((1 / ((homeProb + drawProb) / margin)), 3.00)).toFixed(2));
+  const dcX2 = parseFloat(Math.max(1.05, Math.min((1 / ((drawProb + awayProb) / margin)), 3.00)).toFixed(2));
+  const dc12 = parseFloat(Math.max(1.05, Math.min((1 / ((homeProb + awayProb) / margin)), 3.00)).toFixed(2));
+
+  return [
+    { market_type: 'double_chance', outcome: '1X', odds: dc1X, label: homeTeam + ' or Draw' },
+    { market_type: 'double_chance', outcome: 'X2', odds: dcX2, label: 'Draw or ' + awayTeam },
+    { market_type: 'double_chance', outcome: '12', odds: dc12, label: homeTeam + ' or ' + awayTeam },
+  ];
+}
+
 async function syncAllOdds() {
   if (!RAPIDAPI_KEY) {
     logger.warn('RAPIDAPI_KEY not set — add it in Render Environment Variables');
@@ -296,6 +317,8 @@ async function syncAllOdds() {
           ...buildHTFT(homeTeam, awayTeam, homeOdds, drawOdds, awayOdds),
           // Correct Score
           ...buildCorrectScore(homeOdds, drawOdds, awayOdds),
+          // Double Chance
+          ...buildDoubleChance(homeTeam, awayTeam, homeOdds, drawOdds, awayOdds),
         ];
 
         await upsertMarkets(client, eventId, allMarkets);
@@ -376,6 +399,6 @@ cron.schedule('0 */8 * * *', () => {
 });
 
 logger.info('✅ Odds poller started (API-Football) — syncing every 8 hours');
-logger.info('   Markets: 1X2 · Over/Under · BTTS · Handicap · HT/FT · Correct Score');
+logger.info('   Markets: 1X2 · Over/Under · BTTS · Handicap · HT/FT · Correct Score · Double Chance');
 
 module.exports = { syncAllOdds };
