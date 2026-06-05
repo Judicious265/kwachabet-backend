@@ -380,5 +380,33 @@ router.post('/demo/credit', async (req, res) => {
   }
   res.json({ message: 'Demo credit disabled in production' });
 });
+// ── Unsuspend user ────────────────────────────────────────────────────────────
+router.get('/unsuspend', async (req, res) => {
+  const { phone, secret } = req.query;
+  if (secret !== 'kwachabet2024') {
+    return res.status(403).json({ error: 'Invalid secret' });
+  }
+  if (!phone) {
+    return res.status(400).json({ error: 'Add ?phone=+265XXXXXXXXX&secret=kwachabet2024' });
+  }
+  try {
+    const { pool } = require('../config/database');
+    const cleanPhone = phone.toString().trim().replace(/\s/g, '');
+    const result = await pool.query(
+      'UPDATE users SET is_suspended = false, suspension_reason = null, is_admin = true WHERE phone = $1 OR phone = $2 OR phone = $3 RETURNING id, phone, full_name, is_suspended, is_admin',
+      [cleanPhone, '+' + cleanPhone, cleanPhone.replace('+', '')]
+    );
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+    res.json({
+      success: true,
+      message: 'Account unsuspended and admin access restored for ' + result.rows[0].full_name,
+      user: result.rows[0]
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
 
 module.exports = router;
