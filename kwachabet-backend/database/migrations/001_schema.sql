@@ -265,3 +265,130 @@ VALUES ('100% Welcome Bonus', 'welcome', 100, 50000, 500, 5, 1.5, 30, true)
 ON CONFLICT DO NOTHING;
 
 SELECT 'Schema created successfully' AS result;
+-- ── Admin Roles ───────────────────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS admin_roles (
+  id          UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  name        VARCHAR(50) UNIQUE NOT NULL,
+  label       VARCHAR(100) NOT NULL,
+  description TEXT,
+  color       VARCHAR(20) DEFAULT 'blue',
+  is_active   BOOLEAN DEFAULT TRUE,
+  created_at  TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS admin_permissions (
+  id          UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  role_id     UUID NOT NULL REFERENCES admin_roles(id) ON DELETE CASCADE,
+  resource    VARCHAR(50) NOT NULL,
+  can_view    BOOLEAN DEFAULT FALSE,
+  can_create  BOOLEAN DEFAULT FALSE,
+  can_edit    BOOLEAN DEFAULT FALSE,
+  can_delete  BOOLEAN DEFAULT FALSE,
+  can_approve BOOLEAN DEFAULT FALSE,
+  created_at  TIMESTAMPTZ DEFAULT NOW(),
+  UNIQUE(role_id, resource)
+);
+
+CREATE TABLE IF NOT EXISTS admins (
+  id              UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  user_id         UUID REFERENCES users(id) ON DELETE CASCADE,
+  role_id         UUID NOT NULL REFERENCES admin_roles(id),
+  full_name       VARCHAR(255) NOT NULL,
+  phone           VARCHAR(15) UNIQUE NOT NULL,
+  email           VARCHAR(255),
+  password_hash   VARCHAR(255) NOT NULL,
+  pin_hash        VARCHAR(255),
+  is_active       BOOLEAN DEFAULT TRUE,
+  is_suspended    BOOLEAN DEFAULT FALSE,
+  suspension_reason TEXT,
+  last_login_at   TIMESTAMPTZ,
+  last_login_ip   TEXT,
+  failed_attempts SMALLINT DEFAULT 0,
+  locked_until    TIMESTAMPTZ,
+  created_by      UUID REFERENCES admins(id),
+  created_at      TIMESTAMPTZ DEFAULT NOW(),
+  updated_at      TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS admin_activity_logs (
+  id            UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  admin_id      UUID NOT NULL REFERENCES admins(id),
+  action        VARCHAR(100) NOT NULL,
+  resource_type VARCHAR(50),
+  resource_id   UUID,
+  description   TEXT NOT NULL,
+  old_value     JSONB,
+  new_value     JSONB,
+  ip_address    TEXT,
+  user_agent    TEXT,
+  created_at    TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS withdrawal_approvals (
+  id              UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  withdrawal_id   UUID NOT NULL REFERENCES withdrawals(id),
+  admin_id        UUID NOT NULL REFERENCES admins(id),
+  action          VARCHAR(20) NOT NULL CHECK (action IN ('approved','rejected','flagged')),
+  notes           TEXT,
+  processed_at    TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS investigation_notes (
+  id          UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  flag_id     UUID NOT NULL REFERENCES fraud_flags(id),
+  admin_id    UUID NOT NULL REFERENCES admins(id),
+  note        TEXT NOT NULL,
+  action_taken VARCHAR(50),
+  created_at  TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_admins_phone       ON admins(phone);
+CREATE INDEX IF NOT EXISTS idx_admins_role        ON admins(role_id);
+CREATE INDEX IF NOT EXISTS idx_admin_logs_admin   ON admin_activity_logs(admin_id);
+CREATE INDEX IF NOT EXISTS idx_admin_logs_created ON admin_activity_logs(created_at DESC);
+
+-- Seed roles
+INSERT INTO admin_roles (name, label, description, color) VALUES
+  ('super_admin',      'Super Admin',       'Full system control',                 'red'),
+  ('customer_support', 'Customer Support',  'Customer management and withdrawals', 'blue'),
+  ('fraud_analyst',    'Fraud Analyst',     'Fraud detection and risk management', 'orange'),
+  ('odds_manager',     'Odds Manager',      'Sports, odds and match settlement',   'green'),
+  ('finance_admin',    'Finance Admin',     'Payments, revenue and tax management','purple')
+ON CONFLICT (name) DO NOTHING;
+
+-- Super Admin permissions
+INSERT INTO admin_permissions (role_id, resource, can_view, can_create, can_edit, can_delete, can_approve)
+SELECT id, unnest(ARRAY['dashboard','customers','bets','payments','fraud','sports','tax','reports','admins','settings']),
+  true, true, true, true, true
+FROM admin_roles WHERE name = 'super_admin'
+ON CONFLICT (role_id, resource) DO NOTHING;
+
+-- Customer Support permissions
+INSERT INTO admin_permissions (role_id, resource, can_view, can_create, can_edit, can_delete, can_approve)
+SELECT id, unnest(ARRAY['dashboard','customers','bets','payments']),
+  true, false, true, false, true
+FROM admin_roles WHERE name = 'customer_support'
+ON CONFLICT (role_id, resource) DO NOTHING;
+
+-- Fraud Analyst permissions
+INSERT INTO admin_permissions (role_id, resource, can_view, can_create, can_edit, can_delete, can_approve)
+SELECT id, unnest(ARRAY['dashboard','fraud','customers','bets']),
+  true, true, true, false, false
+FROM admin_roles WHERE name = 'fraud_analyst'
+ON CONFLICT (role_id, resource) DO NOTHING;
+
+-- Odds Manager permissions
+INSERT INTO admin_permissions (role_id, resource, can_view, can_create, can_edit, can_delete, can_approve)
+SELECT id, unnest(ARRAY['dashboard','sports','bets']),
+  true, true, true, true, false
+FROM admin_roles WHERE name = 'odds_manager'
+ON CONFLICT (role_id, resource) DO NOTHING;
+
+-- Finance Admin permissions
+INSERT INTO admin_permissions (role_id, resource, can_view, can_create, can_edit, can_delete, can_approve)
+SELECT id, unnest(ARRAY['dashboard','payments','tax','reports']),
+  true, false, false, false, true
+FROM admin_roles WHERE name = 'finance_admin'
+ON CONFLICT (role_id, resource) DO NOTHING;
+
+SELECT 'RBAC tables created successfully' AS result;
