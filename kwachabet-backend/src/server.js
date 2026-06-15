@@ -80,7 +80,7 @@ app.use('/api/v1/payments', paymentsRoutes);
 app.use('/api/v1/bonus',    bonusRoutes);
 app.use('/webhooks',        webhookRoutes);
 
-// ── RBAC Admin Routes (replaces old adminRoutes) ──────────────────────────────
+// ── RBAC Admin Routes ─────────────────────────────────────────────────────────
 const { adminAuthRouter, adminMgmtRouter, adminApiRouter } = require('./routes/adminRoutes');
 app.use('/api/v1/admin-auth', adminAuthRouter);
 app.use('/api/v1/admin-team', adminMgmtRouter);
