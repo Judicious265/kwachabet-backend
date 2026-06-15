@@ -77,9 +77,14 @@ app.use('/api/v1/wallet',   walletRoutes);
 app.use('/api/v1/betting',  bettingRoutes);
 app.use('/api/v1/odds',     oddsRoutes);
 app.use('/api/v1/payments', paymentsRoutes);
-app.use('/api/v1/admin',    adminRoutes);
 app.use('/api/v1/bonus',    bonusRoutes);
 app.use('/webhooks',        webhookRoutes);
+
+// ── RBAC Admin Routes (replaces old adminRoutes) ──────────────────────────────
+const { adminAuthRouter, adminMgmtRouter, adminApiRouter } = require('./routes/adminRoutes');
+app.use('/api/v1/admin-auth', adminAuthRouter);
+app.use('/api/v1/admin-team', adminMgmtRouter);
+app.use('/api/v1/admin',      adminApiRouter);
 
 app.use((req, res) => res.status(404).json({ error: 'Route not found' }));
 
