@@ -1,15 +1,16 @@
 /**
  * Admin Auth Controller
  * Handles login, logout, token refresh with RBAC
+ * Pure JavaScript - no TypeScript
  */
 
 const bcrypt = require('bcryptjs');
 const jwt    = require('jsonwebtoken');
-const { query, withTransaction } = require('../config/database');
+const { query } = require('../config/database');
 const logger = require('../utils/logger');
 
-const MAX_ATTEMPTS  = 5;
-const LOCKOUT_MINS  = 30;
+const MAX_ATTEMPTS = 5;
+const LOCKOUT_MINS = 30;
 
 function signAdminToken(admin) {
   return jwt.sign(
@@ -35,7 +36,6 @@ exports.login = async (req, res) => {
       return res.status(400).json({ error: 'Phone and password are required.' });
     }
 
-    // Find admin with role info
     const { rows } = await query(`
       SELECT a.*, r.name as role_name, r.label as role_label, r.color as role_color
       FROM admins a
@@ -44,29 +44,24 @@ exports.login = async (req, res) => {
     `, [phone]);
 
     const admin = rows[0];
-
     if (!admin) {
-      logger.warn(`Failed admin login attempt: ${phone} from ${ip}`);
+      logger.warn('Failed admin login: ' + phone + ' from ' + ip);
       return res.status(401).json({ error: 'Invalid phone or password.' });
     }
 
-    // Check if account is locked
     if (admin.locked_until && new Date(admin.locked_until) > new Date()) {
       const mins = Math.ceil((new Date(admin.locked_until) - Date.now()) / 60000);
-      return res.status(423).json({ error: `Account locked. Try again in ${mins} minutes.` });
+      return res.status(423).json({ error: 'Account locked. Try again in ' + mins + ' minutes.' });
     }
 
-    // Check suspended
     if (admin.is_suspended) {
       return res.status(403).json({ error: 'Your admin account has been suspended. Contact Super Admin.' });
     }
 
-    // Check active
     if (!admin.is_active) {
       return res.status(403).json({ error: 'Account is inactive. Contact Super Admin.' });
     }
 
-    // Verify password
     const valid = await bcrypt.compare(password, admin.password_hash);
     if (!valid) {
       const newAttempts = (admin.failed_attempts || 0) + 1;
@@ -76,38 +71,32 @@ exports.login = async (req, res) => {
           'UPDATE admins SET failed_attempts=$1, locked_until=$2 WHERE id=$3',
           [newAttempts, lockedUntil, admin.id]
         );
-        logger.warn(`Admin account locked after ${MAX_ATTEMPTS} attempts: ${phone}`);
-        return res.status(423).json({ error: `Too many failed attempts. Account locked for ${LOCKOUT_MINS} minutes.` });
+        return res.status(423).json({ error: 'Too many failed attempts. Account locked for ' + LOCKOUT_MINS + ' minutes.' });
       }
       await query('UPDATE admins SET failed_attempts=$1 WHERE id=$2', [newAttempts, admin.id]);
-      return res.status(401).json({ error: `Invalid password. ${MAX_ATTEMPTS - newAttempts} attempts remaining.` });
+      return res.status(401).json({ error: 'Invalid password. ' + (MAX_ATTEMPTS - newAttempts) + ' attempts remaining.' });
     }
 
-    // Success — reset failed attempts, update last login
     await query(
       'UPDATE admins SET failed_attempts=0, locked_until=NULL, last_login_at=NOW(), last_login_ip=$1 WHERE id=$2',
       [ip, admin.id]
     );
 
-    // Get permissions for this role
     const { rows: perms } = await query(
       'SELECT resource, can_view, can_create, can_edit, can_delete, can_approve FROM admin_permissions WHERE role_id=$1',
       [admin.role_id]
     );
 
-    const permissions: Record<string, any> = {};
-    perms.forEach(p => { permissions[p.resource] = p; });
+    const permissions = {};
+    perms.forEach(function(p) { permissions[p.resource] = p; });
 
-    // Log activity
     await query(
-      `INSERT INTO admin_activity_logs (admin_id,action,description,ip_address,user_agent)
-       VALUES ($1,'login','Admin logged in',$2,$3)`,
-      [admin.id, ip, userAgent]
+      'INSERT INTO admin_activity_logs (admin_id,action,description,ip_address,user_agent) VALUES ($1,$2,$3,$4,$5)',
+      [admin.id, 'login', 'Admin logged in', ip, userAgent]
     );
 
     const token = signAdminToken(admin);
-
-    logger.info(`Admin login: ${admin.full_name} (${admin.role_name}) from ${ip}`);
+    logger.info('Admin login: ' + admin.full_name + ' (' + admin.role_name + ') from ' + ip);
 
     res.json({
       token,
@@ -122,7 +111,7 @@ exports.login = async (req, res) => {
       },
     });
   } catch (err) {
-    logger.error('Admin login error:', err.message);
+    logger.error('Admin login error: ' + err.message);
     res.status(500).json({ error: 'Login failed. Try again.' });
   }
 };
@@ -144,49 +133,44 @@ exports.getProfile = async (req, res) => {
       'SELECT resource, can_view, can_create, can_edit, can_delete, can_approve FROM admin_permissions WHERE role_id=(SELECT role_id FROM admins WHERE id=$1)',
       [req.admin.id]
     );
-    const permissions: Record<string, any> = {};
-    perms.forEach(p => { permissions[p.resource] = p; });
+    const permissions = {};
+    perms.forEach(function(p) { permissions[p.resource] = p; });
 
-    res.json({ admin: { ...rows[0], permissions } });
+    res.json({ admin: Object.assign({}, rows[0], { permissions }) });
   } catch (err) {
     res.status(500).json({ error: 'Failed to get profile.' });
   }
 };
 
-// ── Create admin (Super Admin only) ──────────────────────────────────────────
+// ── Create admin ──────────────────────────────────────────────────────────────
 exports.createAdmin = async (req, res) => {
   try {
     const { full_name, phone, password, role_name, email } = req.body;
-
     if (!full_name || !phone || !password || !role_name) {
       return res.status(400).json({ error: 'full_name, phone, password and role_name are required.' });
     }
 
-    // Get role
     const { rows: roleRows } = await query('SELECT id FROM admin_roles WHERE name=$1', [role_name]);
-    if (!roleRows[0]) return res.status(400).json({ error: `Role '${role_name}' not found.` });
+    if (!roleRows[0]) return res.status(400).json({ error: "Role '" + role_name + "' not found." });
 
     const existing = await query('SELECT id FROM admins WHERE phone=$1', [phone]);
     if (existing.rows.length > 0) return res.status(409).json({ error: 'Phone already registered as admin.' });
 
     const passwordHash = await bcrypt.hash(password, 12);
-    const { rows } = await query(`
-      INSERT INTO admins (full_name, phone, email, password_hash, role_id, created_by)
-      VALUES ($1,$2,$3,$4,$5,$6)
-      RETURNING id, full_name, phone, role_id
-    `, [full_name, phone, email || null, passwordHash, roleRows[0].id, req.admin.id]);
-
-    // Log
-    await query(
-      `INSERT INTO admin_activity_logs (admin_id,action,resource_type,resource_id,description,ip_address)
-       VALUES ($1,'create_admin','admin',$2,$3,$4)`,
-      [req.admin.id, rows[0].id, `Created admin: ${full_name} (${role_name})`, req.ip]
+    const { rows } = await query(
+      'INSERT INTO admins (full_name, phone, email, password_hash, role_id, created_by) VALUES ($1,$2,$3,$4,$5,$6) RETURNING id, full_name, phone, role_id',
+      [full_name, phone, email || null, passwordHash, roleRows[0].id, req.admin.id]
     );
 
-    logger.info(`Admin created: ${full_name} by ${req.admin.full_name}`);
-    res.status(201).json({ message: `Admin account created for ${full_name}.`, admin: rows[0] });
+    await query(
+      'INSERT INTO admin_activity_logs (admin_id,action,resource_type,resource_id,description,ip_address) VALUES ($1,$2,$3,$4,$5,$6)',
+      [req.admin.id, 'create_admin', 'admin', rows[0].id, 'Created admin: ' + full_name + ' (' + role_name + ')', req.ip]
+    );
+
+    logger.info('Admin created: ' + full_name + ' by ' + req.admin.full_name);
+    res.status(201).json({ message: 'Admin account created for ' + full_name + '.', admin: rows[0] });
   } catch (err) {
-    logger.error('createAdmin error:', err.message);
+    logger.error('createAdmin error: ' + err.message);
     res.status(500).json({ error: err.message });
   }
 };
@@ -215,31 +199,29 @@ exports.updateAdmin = async (req, res) => {
   try {
     const { id } = req.params;
     const { full_name, email, role_name, new_password } = req.body;
+    const updates = [];
+    const args    = [];
 
-    const updates: string[] = [];
-    const args: any[]       = [];
-
-    if (full_name) { args.push(full_name); updates.push(`full_name=$${args.length}`); }
-    if (email)     { args.push(email);     updates.push(`email=$${args.length}`); }
+    if (full_name)    { args.push(full_name);    updates.push('full_name=$'    + args.length); }
+    if (email)        { args.push(email);        updates.push('email=$'        + args.length); }
     if (role_name) {
       const { rows: rr } = await query('SELECT id FROM admin_roles WHERE name=$1', [role_name]);
       if (!rr[0]) return res.status(400).json({ error: 'Invalid role.' });
-      args.push(rr[0].id); updates.push(`role_id=$${args.length}`);
+      args.push(rr[0].id); updates.push('role_id=$' + args.length);
     }
     if (new_password) {
       const hash = await bcrypt.hash(new_password, 12);
-      args.push(hash); updates.push(`password_hash=$${args.length}`);
+      args.push(hash); updates.push('password_hash=$' + args.length);
     }
     if (!updates.length) return res.status(400).json({ error: 'No fields to update.' });
 
     updates.push('updated_at=NOW()');
     args.push(id);
-    await query(`UPDATE admins SET ${updates.join(',')} WHERE id=$${args.length}`, args);
+    await query('UPDATE admins SET ' + updates.join(',') + ' WHERE id=$' + args.length, args);
 
     await query(
-      `INSERT INTO admin_activity_logs (admin_id,action,resource_type,resource_id,description,ip_address)
-       VALUES ($1,'update_admin','admin',$2,$3,$4)`,
-      [req.admin.id, id, `Updated admin ${id}`, req.ip]
+      'INSERT INTO admin_activity_logs (admin_id,action,resource_type,resource_id,description,ip_address) VALUES ($1,$2,$3,$4,$5,$6)',
+      [req.admin.id, 'update_admin', 'admin', id, 'Updated admin ' + id, req.ip]
     );
 
     res.json({ message: 'Admin updated.' });
@@ -248,7 +230,7 @@ exports.updateAdmin = async (req, res) => {
   }
 };
 
-// ── Suspend / activate ────────────────────────────────────────────────────────
+// ── Suspend admin ─────────────────────────────────────────────────────────────
 exports.suspendAdmin = async (req, res) => {
   try {
     const { id } = req.params;
@@ -257,9 +239,8 @@ exports.suspendAdmin = async (req, res) => {
 
     await query('UPDATE admins SET is_suspended=true, suspension_reason=$1, updated_at=NOW() WHERE id=$2', [reason, id]);
     await query(
-      `INSERT INTO admin_activity_logs (admin_id,action,resource_type,resource_id,description,ip_address)
-       VALUES ($1,'suspend_admin','admin',$2,$3,$4)`,
-      [req.admin.id, id, `Suspended admin. Reason: ${reason}`, req.ip]
+      'INSERT INTO admin_activity_logs (admin_id,action,resource_type,resource_id,description,ip_address) VALUES ($1,$2,$3,$4,$5,$6)',
+      [req.admin.id, 'suspend_admin', 'admin', id, 'Suspended admin. Reason: ' + reason, req.ip]
     );
     res.json({ message: 'Admin suspended.' });
   } catch (err) {
@@ -267,14 +248,14 @@ exports.suspendAdmin = async (req, res) => {
   }
 };
 
+// ── Activate admin ────────────────────────────────────────────────────────────
 exports.activateAdmin = async (req, res) => {
   try {
     const { id } = req.params;
     await query('UPDATE admins SET is_suspended=false, suspension_reason=null, failed_attempts=0, locked_until=null, updated_at=NOW() WHERE id=$1', [id]);
     await query(
-      `INSERT INTO admin_activity_logs (admin_id,action,resource_type,resource_id,description,ip_address)
-       VALUES ($1,'activate_admin','admin',$2,'Admin account activated',$3)`,
-      [req.admin.id, id, req.ip]
+      'INSERT INTO admin_activity_logs (admin_id,action,resource_type,resource_id,description,ip_address) VALUES ($1,$2,$3,$4,$5,$6)',
+      [req.admin.id, 'activate_admin', 'admin', id, 'Admin account activated', req.ip]
     );
     res.json({ message: 'Admin activated.' });
   } catch (err) {
@@ -293,11 +274,10 @@ exports.deleteAdmin = async (req, res) => {
 
     await query('DELETE FROM admins WHERE id=$1', [id]);
     await query(
-      `INSERT INTO admin_activity_logs (admin_id,action,resource_type,description,ip_address)
-       VALUES ($1,'delete_admin','admin',$2,$3)`,
-      [req.admin.id, `Deleted admin: ${rows[0].full_name}`, req.ip]
+      'INSERT INTO admin_activity_logs (admin_id,action,resource_type,description,ip_address) VALUES ($1,$2,$3,$4,$5)',
+      [req.admin.id, 'delete_admin', 'admin', 'Deleted admin: ' + rows[0].full_name, req.ip]
     );
-    res.json({ message: `Admin ${rows[0].full_name} deleted.` });
+    res.json({ message: 'Admin ' + rows[0].full_name + ' deleted.' });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -310,19 +290,18 @@ exports.getActivityLogs = async (req, res) => {
     const offset = (parseInt(page) - 1) * parseInt(limit);
 
     let sql = `
-      SELECT l.*, a.full_name as admin_name, a.phone as admin_phone,
-             r.label as admin_role
+      SELECT l.*, a.full_name as admin_name, a.phone as admin_phone, r.label as admin_role
       FROM admin_activity_logs l
       JOIN admins a ON l.admin_id = a.id
       JOIN admin_roles r ON a.role_id = r.id
       WHERE 1=1
     `;
-    const args: any[] = [];
-    if (admin_id) { args.push(admin_id); sql += ` AND l.admin_id=$${args.length}`; }
-    sql += ` ORDER BY l.created_at DESC LIMIT ${Math.min(parseInt(limit), 100)} OFFSET ${offset}`;
+    const args = [];
+    if (admin_id) { args.push(admin_id); sql += ' AND l.admin_id=$' + args.length; }
+    sql += ' ORDER BY l.created_at DESC LIMIT ' + Math.min(parseInt(limit), 100) + ' OFFSET ' + offset;
 
     const { rows } = await query(sql, args);
-    const count    = await query('SELECT COUNT(*) FROM admin_activity_logs' + (admin_id ? ` WHERE admin_id='${admin_id}'` : ''));
+    const count    = await query('SELECT COUNT(*) FROM admin_activity_logs' + (admin_id ? " WHERE admin_id='" + admin_id + "'" : ''));
 
     res.json({ logs: rows, total: parseInt(count.rows[0].count) });
   } catch (err) {
