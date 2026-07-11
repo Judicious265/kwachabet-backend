@@ -1,28 +1,27 @@
 /**
- * Kwacha Bet - Main Server (Fixed for Render)
+ * Kwacha Bet - Main Server
  */
 
 require('dotenv').config();
-const express   = require('express');
-const cors      = require('cors');
-const helmet    = require('helmet');
-const morgan    = require('morgan');
-const rateLimit = require('express-rate-limit');
-const http      = require('http');
-const WebSocket = require('ws');
+const express    = require('express');
+const cors       = require('cors');
+const helmet     = require('helmet');
+const morgan     = require('morgan');
+const rateLimit  = require('express-rate-limit');
+const http       = require('http');
+const WebSocket  = require('ws');
 
 const { testConnection } = require('./config/database');
 const logger             = require('./utils/logger');
 
-const authRoutes    = require('./routes/auth');
-const userRoutes    = require('./routes/users');
-const walletRoutes  = require('./routes/wallet');
-const bettingRoutes = require('./routes/betting');
-const oddsRoutes    = require('./routes/odds');
-const paymentsRoutes= require('./routes/payments');
-const adminRoutes   = require('./routes/admin');
-const bonusRoutes   = require('./routes/bonus');
-const webhookRoutes = require('./routes/webhooks');
+const authRoutes     = require('./routes/auth');
+const userRoutes     = require('./routes/users');
+const walletRoutes   = require('./routes/wallet');
+const bettingRoutes  = require('./routes/betting');
+const oddsRoutes     = require('./routes/odds');
+const paymentsRoutes = require('./routes/payments');
+const bonusRoutes    = require('./routes/bonus');
+const webhookRoutes  = require('./routes/webhooks');
 
 const app    = express();
 const server = http.createServer(app);
@@ -30,9 +29,29 @@ const server = http.createServer(app);
 app.use(helmet());
 app.set('trust proxy', 1);
 
+// ── CORS — allow all Vercel deployments + localhost ───────────────────────────
+const allowedOrigins = [
+  'https://kwachabet-admin.vercel.app',
+  'https://kwachabet-frontend.vercel.app',
+  'http://localhost:3000',
+  'http://localhost:3001',
+];
+
 app.use(cors({
-  origin: '*', // Tighten this after testing
+  origin: function (origin, callback) {
+    // Allow requests with no origin (mobile apps, curl, Render health checks)
+    if (!origin) return callback(null, true);
+    // Allow any vercel.app subdomain for preview deployments
+    if (origin.endsWith('.vercel.app')) return callback(null, true);
+    // Allow specific origins
+    if (allowedOrigins.includes(origin)) return callback(null, true);
+    // Allow localhost for dev
+    if (origin.startsWith('http://localhost')) return callback(null, true);
+    callback(null, true); // Remove this line after confirming all origins
+  },
   credentials: true,
+  methods:     ['GET','POST','PUT','PATCH','DELETE','OPTIONS'],
+  allowedHeaders: ['Content-Type','Authorization','X-Requested-With'],
 }));
 
 const globalLimiter = rateLimit({ windowMs: 15 * 60 * 1000, max: 300 });
@@ -86,18 +105,20 @@ app.use('/api/v1/admin-auth', adminAuthRouter);
 app.use('/api/v1/admin-team', adminMgmtRouter);
 app.use('/api/v1/admin',      adminApiRouter);
 
+// ── 404 ───────────────────────────────────────────────────────────────────────
 app.use((req, res) => res.status(404).json({ error: 'Route not found' }));
 
+// ── Error handler ─────────────────────────────────────────────────────────────
 // eslint-disable-next-line no-unused-vars
 app.use((err, req, res, next) => {
-  logger.error(`Error: ${err.message}`);
+  logger.error('Error: ' + err.message);
   res.status(err.status || 500).json({
     error: process.env.NODE_ENV === 'production' ? 'Internal server error' : err.message,
   });
 });
 
 // ── WebSocket ─────────────────────────────────────────────────────────────────
-const wss      = new WebSocket.Server({ server, path: '/ws/odds' });
+const wss       = new WebSocket.Server({ server, path: '/ws/odds' });
 const wsClients = new Set();
 
 wss.on('connection', (ws) => {
@@ -118,28 +139,25 @@ global.broadcastOdds = (data) => {
 // ── Start ─────────────────────────────────────────────────────────────────────
 async function start() {
   logger.info('Starting Kwacha Bet API...');
-  logger.info(`NODE_ENV: ${process.env.NODE_ENV}`);
-  logger.info(`DATABASE_URL set: ${!!process.env.DATABASE_URL}`);
-  logger.info(`JWT_SECRET set: ${!!process.env.JWT_SECRET}`);
+  logger.info('NODE_ENV: ' + process.env.NODE_ENV);
+  logger.info('DATABASE_URL set: ' + !!process.env.DATABASE_URL);
+  logger.info('JWT_SECRET set: '   + !!process.env.JWT_SECRET);
 
   const dbOk = await testConnection();
-
   if (!dbOk) {
     logger.error('Database connection failed. Exiting.');
-    logger.error('Make sure DATABASE_URL is set in Render environment variables.');
     process.exit(1);
   }
 
-  // Start background jobs
   try { require('./jobs/oddsPoller'); }
-  catch (e) { logger.warn('Odds poller skipped:', e.message); }
+  catch (e) { logger.warn('Odds poller skipped: ' + e.message); }
 
   try { require('./jobs/betSettler'); }
-  catch (e) { logger.warn('Bet settler skipped:', e.message); }
+  catch (e) { logger.warn('Bet settler skipped: ' + e.message); }
 
   const PORT = process.env.PORT || 5000;
   server.listen(PORT, '0.0.0.0', () => {
-    logger.info(`🚀 Kwacha Bet API running on port ${PORT}`);
+    logger.info('🚀 Kwacha Bet API running on port ' + PORT);
   });
 }
 
