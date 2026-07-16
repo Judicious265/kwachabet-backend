@@ -51,7 +51,7 @@ app.use(cors({
   },
   credentials: true,
   methods:     ['GET','POST','PUT','PATCH','DELETE','OPTIONS'],
-  allowedHeaders: ['Content-Type','Authorization','X-Requested-With'],
+allowedHeaders: ['Content-Type','Authorization','X-Requested-With','X-Device-Fingerprint'],
 }));
 
 const globalLimiter = rateLimit({ windowMs: 15 * 60 * 1000, max: 300 });
