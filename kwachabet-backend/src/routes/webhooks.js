@@ -28,13 +28,10 @@ router.post('/paychangu', async (req, res) => {
 });
 
 // ── ONE-TIME DATABASE SETUP ───────────────────────────────────────────────────
-// Visit: https://kwachabet-backend.onrender.com
-// This creates all tables. Safe to run multiple times (uses IF NOT EXISTS)
 router.get('/setup-db', async (req, res) => {
   const { pool } = require('../config/database');
   try {
     await pool.query(`CREATE EXTENSION IF NOT EXISTS "uuid-ossp";`);
-
     await pool.query(`
       CREATE TABLE IF NOT EXISTS users (
         id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
@@ -58,7 +55,6 @@ router.get('/setup-db', async (req, res) => {
         updated_at TIMESTAMPTZ DEFAULT NOW()
       );
     `);
-
     await pool.query(`
       CREATE TABLE IF NOT EXISTS wallets (
         id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
@@ -71,7 +67,6 @@ router.get('/setup-db', async (req, res) => {
         updated_at TIMESTAMPTZ DEFAULT NOW()
       );
     `);
-
     await pool.query(`
       CREATE TABLE IF NOT EXISTS transactions (
         id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
@@ -88,7 +83,6 @@ router.get('/setup-db', async (req, res) => {
         created_at TIMESTAMPTZ DEFAULT NOW()
       );
     `);
-
     await pool.query(`
       CREATE TABLE IF NOT EXISTS deposits (
         id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
@@ -105,7 +99,6 @@ router.get('/setup-db', async (req, res) => {
         updated_at TIMESTAMPTZ DEFAULT NOW()
       );
     `);
-
     await pool.query(`
       CREATE TABLE IF NOT EXISTS withdrawals (
         id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
@@ -124,15 +117,7 @@ router.get('/setup-db', async (req, res) => {
         updated_at TIMESTAMPTZ DEFAULT NOW()
       );
     `);
-
-    await pool.query(`
-      CREATE TABLE IF NOT EXISTS sports (
-        id VARCHAR(50) PRIMARY KEY,
-        name VARCHAR(100) NOT NULL,
-        is_active BOOLEAN DEFAULT TRUE
-      );
-    `);
-
+    await pool.query(`CREATE TABLE IF NOT EXISTS sports (id VARCHAR(50) PRIMARY KEY, name VARCHAR(100) NOT NULL, is_active BOOLEAN DEFAULT TRUE);`);
     await pool.query(`
       CREATE TABLE IF NOT EXISTS events (
         id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
@@ -150,7 +135,6 @@ router.get('/setup-db', async (req, res) => {
         updated_at TIMESTAMPTZ DEFAULT NOW()
       );
     `);
-
     await pool.query(`
       CREATE TABLE IF NOT EXISTS markets (
         id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
@@ -163,12 +147,7 @@ router.get('/setup-db', async (req, res) => {
         updated_at TIMESTAMPTZ DEFAULT NOW()
       );
     `);
-
-    await pool.query(`
-      CREATE UNIQUE INDEX IF NOT EXISTS idx_markets_unique
-      ON markets(event_id, market_type, outcome);
-    `);
-
+    await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS idx_markets_unique ON markets(event_id, market_type, outcome);`);
     await pool.query(`
       CREATE TABLE IF NOT EXISTS tickets (
         id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
@@ -187,7 +166,6 @@ router.get('/setup-db', async (req, res) => {
         created_at TIMESTAMPTZ DEFAULT NOW()
       );
     `);
-
     await pool.query(`
       CREATE TABLE IF NOT EXISTS ticket_selections (
         id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
@@ -201,7 +179,6 @@ router.get('/setup-db', async (req, res) => {
         settled_at TIMESTAMPTZ
       );
     `);
-
     await pool.query(`
       CREATE TABLE IF NOT EXISTS fraud_flags (
         id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
@@ -217,7 +194,6 @@ router.get('/setup-db', async (req, res) => {
         created_at TIMESTAMPTZ DEFAULT NOW()
       );
     `);
-
     await pool.query(`
       CREATE TABLE IF NOT EXISTS bonus_campaigns (
         id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
@@ -234,7 +210,6 @@ router.get('/setup-db', async (req, res) => {
         created_at TIMESTAMPTZ DEFAULT NOW()
       );
     `);
-
     await pool.query(`
       CREATE TABLE IF NOT EXISTS user_bonuses (
         id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
@@ -249,7 +224,6 @@ router.get('/setup-db', async (req, res) => {
         created_at TIMESTAMPTZ DEFAULT NOW()
       );
     `);
-
     await pool.query(`
       CREATE TABLE IF NOT EXISTS referrals (
         id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
@@ -261,7 +235,6 @@ router.get('/setup-db', async (req, res) => {
         created_at TIMESTAMPTZ DEFAULT NOW()
       );
     `);
-
     await pool.query(`
       CREATE TABLE IF NOT EXISTS otp_codes (
         id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
@@ -274,7 +247,6 @@ router.get('/setup-db', async (req, res) => {
         created_at TIMESTAMPTZ DEFAULT NOW()
       );
     `);
-
     await pool.query(`
       CREATE INDEX IF NOT EXISTS idx_users_phone ON users(phone);
       CREATE INDEX IF NOT EXISTS idx_wallets_user ON wallets(user_id);
@@ -283,91 +255,127 @@ router.get('/setup-db', async (req, res) => {
       CREATE INDEX IF NOT EXISTS idx_events_status ON events(status);
       CREATE INDEX IF NOT EXISTS idx_markets_event ON markets(event_id);
     `);
-
     await pool.query(`
       INSERT INTO sports (id, name) VALUES
-        ('football','Football'),
-        ('basketball','Basketball'),
-        ('tennis','Tennis'),
-        ('ice_hockey','Ice Hockey'),
-        ('baseball','Baseball'),
-        ('rugby_league','Rugby League')
+        ('football','Football'),('basketball','Basketball'),('tennis','Tennis'),
+        ('ice_hockey','Ice Hockey'),('baseball','Baseball'),('rugby_league','Rugby League')
       ON CONFLICT (id) DO NOTHING;
     `);
-
     await pool.query(`
-      INSERT INTO bonus_campaigns
-        (name, type, percent, max_bonus, min_deposit, wagering_req, min_odds, expiry_days, is_active)
-      VALUES
-        ('100% Welcome Bonus','welcome',100,50000,500,5,1.5,30,true)
+      INSERT INTO bonus_campaigns (name,type,percent,max_bonus,min_deposit,wagering_req,min_odds,expiry_days,is_active)
+      VALUES ('100% Welcome Bonus','welcome',100,50000,500,5,1.5,30,true)
       ON CONFLICT DO NOTHING;
     `);
 
-    // Verify tables were created
-    const { rows } = await pool.query(`
-      SELECT tablename FROM pg_tables
-      WHERE schemaname = 'public'
-      ORDER BY tablename;
-    `);
-
-    const tables = rows.map(r => r.tablename);
-    logger.info('Database setup complete. Tables:', tables.join(', '));
-
-    res.json({
-      success: true,
-      message: 'Database setup complete! All tables created.',
-      tables: tables,
-      next_steps: [
-        '1. Register an account on your frontend',
-        '2. Make yourself admin using the /webhooks/make-admin endpoint',
-        '3. Remove this setup endpoint from production when done'
-      ]
-    });
+    const { rows } = await pool.query(`SELECT tablename FROM pg_tables WHERE schemaname='public' ORDER BY tablename;`);
+    res.json({ success: true, message: 'Database setup complete!', tables: rows.map(r => r.tablename) });
   } catch (err) {
     logger.error('Setup error:', err.message);
-    res.status(500).json({
-      success: false,
-      error: err.message,
-      hint: 'Check if DATABASE_URL is set correctly'
-    });
+    res.status(500).json({ success: false, error: err.message });
   }
 });
 
-// ── Make user admin ───────────────────────────────────────────────────────────
+// ── Make user admin (users table only) ───────────────────────────────────────
 router.get('/make-admin', async (req, res) => {
   const { phone, secret } = req.query;
-  
-  // Safety check - require a secret so random people can't use this
-  if (secret !== 'kwachabet2024') {
-    return res.status(403).json({ error: 'Invalid secret' });
-  }
-  
+  if (secret !== 'kwachabet2024') return res.status(403).json({ error: 'Invalid secret' });
   if (!phone) return res.status(400).json({ error: 'Add ?phone=+265998337818&secret=kwachabet2024' });
-  
   try {
     const { pool } = require('../config/database');
-    
-    // First check if user exists
-    const check = await pool.query('SELECT id, phone, full_name, is_admin FROM users WHERE phone = $1', [phone]);
-    
+    const check = await pool.query('SELECT id,phone,full_name,is_admin FROM users WHERE phone=$1', [phone]);
     if (check.rows.length === 0) {
-      // List all users to help debug
-      const all = await pool.query('SELECT phone, full_name, created_at FROM users ORDER BY created_at DESC LIMIT 10');
-      return res.status(404).json({ 
+      const all = await pool.query('SELECT phone,full_name FROM users ORDER BY created_at DESC LIMIT 10');
+      return res.status(404).json({
         error: 'User not found',
         hint: 'Check the phone number format exactly as stored',
         registered_numbers: all.rows.map(r => r.phone),
-        total_users: all.rows.length
+        total_users: all.rows.length,
       });
     }
-    
-    await pool.query('UPDATE users SET is_admin = true WHERE phone = $1', [phone]);
-    
+    await pool.query('UPDATE users SET is_admin=true WHERE phone=$1', [phone]);
+    res.json({ success: true, message: 'Admin granted to ' + check.rows[0].full_name, user: check.rows[0] });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── NEW: Setup Super Admin in RBAC admins table ───────────────────────────────
+// Visit: /webhooks/setup-super-admin?phone=+265998337818&secret=kwachabet2024
+router.get('/setup-super-admin', async (req, res) => {
+  const { phone, secret } = req.query;
+  if (secret !== 'kwachabet2024') return res.status(403).json({ error: 'Invalid secret' });
+  const targetPhone = phone || '+265998337818';
+  try {
+    const { pool } = require('../config/database');
+
+    // Get user from users table
+    const userRes = await pool.query('SELECT * FROM users WHERE phone=$1', [targetPhone]);
+    if (!userRes.rows[0]) {
+      return res.status(404).json({ error: 'User not found in users table. Register first.' });
+    }
+    const user = userRes.rows[0];
+
+    // Check admin_roles table exists and has super_admin
+    const roleRes = await pool.query("SELECT id FROM admin_roles WHERE name='super_admin'");
+    if (!roleRes.rows[0]) {
+      return res.status(404).json({
+        error: 'super_admin role not found. Run the RBAC schema SQL first.',
+        hint: 'Go to Render PostgreSQL and run the RBAC schema from your schema.sql file'
+      });
+    }
+    const roleId = roleRes.rows[0].id;
+
+    // Insert into admins table
+    await pool.query(`
+      INSERT INTO admins (full_name, phone, password_hash, role_id, is_active, user_id)
+      VALUES ($1, $2, $3, $4, true, $5)
+      ON CONFLICT (phone) DO UPDATE SET
+        is_active    = true,
+        is_suspended = false,
+        failed_attempts = 0,
+        locked_until = NULL,
+        role_id      = EXCLUDED.role_id,
+        password_hash = EXCLUDED.password_hash,
+        updated_at   = NOW()
+    `, [user.full_name, user.phone, user.password_hash, roleId, user.id]);
+
+    // Also ensure is_admin=true in users table
+    await pool.query('UPDATE users SET is_admin=true WHERE phone=$1', [targetPhone]);
+
+    const result = await pool.query(`
+      SELECT a.id, a.full_name, a.phone, a.is_active, a.is_suspended,
+             r.name as role, r.label as role_label
+      FROM admins a
+      JOIN admin_roles r ON a.role_id = r.id
+      WHERE a.phone = $1
+    `, [targetPhone]);
+
     res.json({
       success: true,
-      message: `Admin granted to ${check.rows[0].full_name}`,
-      user: { id: check.rows[0].id, phone: check.rows[0].phone, full_name: check.rows[0].full_name }
+      message: 'Super Admin created in RBAC system. You can now login to admin dashboard.',
+      admin: result.rows[0],
+      next_step: 'Go to kwachabet-admin.vercel.app/login and login with your phone and PIN',
     });
+  } catch (err) {
+    logger.error('setup-super-admin error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── Unsuspend user ────────────────────────────────────────────────────────────
+router.get('/unsuspend', async (req, res) => {
+  const { phone, secret } = req.query;
+  if (secret !== 'kwachabet2024') return res.status(403).json({ error: 'Invalid secret' });
+  if (!phone) return res.status(400).json({ error: 'Add ?phone=+265XXXXXXXXX&secret=kwachabet2024' });
+  try {
+    const { pool } = require('../config/database');
+    const cleanPhone = phone.toString().trim().replace(/\s/g, '');
+    const result = await pool.query(
+      'UPDATE users SET is_suspended=false, suspension_reason=null, is_admin=true WHERE phone=$1 OR phone=$2 OR phone=$3 RETURNING id,phone,full_name,is_suspended,is_admin',
+      [cleanPhone, '+' + cleanPhone, cleanPhone.replace('+', '')]
+    );
+    if (result.rows.length === 0) return res.status(404).json({ error: 'User not found' });
+    res.json({ success: true, message: 'Account unsuspended for ' + result.rows[0].full_name, user: result.rows[0] });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -375,38 +383,8 @@ router.get('/make-admin', async (req, res) => {
 
 // ── Demo credit (development only) ────────────────────────────────────────────
 router.post('/demo/credit', async (req, res) => {
-  if (process.env.NODE_ENV === 'production') {
-    return res.status(404).json({ error: 'Not found' });
-  }
+  if (process.env.NODE_ENV === 'production') return res.status(404).json({ error: 'Not found' });
   res.json({ message: 'Demo credit disabled in production' });
-});
-// ── Unsuspend user ────────────────────────────────────────────────────────────
-router.get('/unsuspend', async (req, res) => {
-  const { phone, secret } = req.query;
-  if (secret !== 'kwachabet2024') {
-    return res.status(403).json({ error: 'Invalid secret' });
-  }
-  if (!phone) {
-    return res.status(400).json({ error: 'Add ?phone=+265XXXXXXXXX&secret=kwachabet2024' });
-  }
-  try {
-    const { pool } = require('../config/database');
-    const cleanPhone = phone.toString().trim().replace(/\s/g, '');
-    const result = await pool.query(
-      'UPDATE users SET is_suspended = false, suspension_reason = null, is_admin = true WHERE phone = $1 OR phone = $2 OR phone = $3 RETURNING id, phone, full_name, is_suspended, is_admin',
-      [cleanPhone, '+' + cleanPhone, cleanPhone.replace('+', '')]
-    );
-    if (result.rows.length === 0) {
-      return res.status(404).json({ error: 'User not found' });
-    }
-    res.json({
-      success: true,
-      message: 'Account unsuspended and admin access restored for ' + result.rows[0].full_name,
-      user: result.rows[0]
-    });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
 });
 
 module.exports = router;
