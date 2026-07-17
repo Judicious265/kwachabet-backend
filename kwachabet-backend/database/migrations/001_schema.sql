@@ -391,13 +391,4 @@ SELECT id, unnest(ARRAY['dashboard','payments','tax','reports']),
 FROM admin_roles WHERE name = 'finance_admin'
 ON CONFLICT (role_id, resource) DO NOTHING;
 
-INSERT INTO admins (full_name, phone, password_hash, role_id, is_active)
-SELECT 
-  'Young Duwa',
-  '+265998337818',
-  (SELECT password_hash FROM users WHERE phone = '+265998337818'),
-  (SELECT id FROM admin_roles WHERE name = 'super_admin'),
-  true
-ON CONFLICT (phone) DO NOTHING;
-
 SELECT 'RBAC tables created successfully' AS result;
