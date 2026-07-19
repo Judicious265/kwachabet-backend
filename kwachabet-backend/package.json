@@ -33,6 +33,5 @@
   },
   "devDependencies": {
     "nodemon": "^3.0.2"
-    "@types/jsonwebtoken": "^9.0.0"
   }
 }
