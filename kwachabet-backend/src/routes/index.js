@@ -60,6 +60,7 @@ bettingRouter.get('/tickets/:code', bettingCtrl.getTicket);
 // ── Odds Router ───────────────────────────────────────────────────────────────
 const oddsRouter = express.Router();
 oddsRouter.get('/events',   oddsCtrl.getEvents);
+oddsRouter.get('/events/:id/markets', oddsCtrl.getEventMarkets);
 oddsRouter.get('/featured', oddsCtrl.getFeatured);
 oddsRouter.get('/sports',   oddsCtrl.getSports);
 
